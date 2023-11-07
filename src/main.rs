@@ -1,14 +1,19 @@
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::Context;
 use axum::{
-    extract::{Path, State, Host},
+    extract::{Host, Path, State},
     http::StatusCode,
     response::Redirect,
     routing::{get, post},
     Router, Server,
 };
 use moka::sync::Cache;
+use prometheus_client::{
+    encoding::{self, EncodeLabelSet, EncodeLabelValue},
+    metrics::{counter::Counter, family::Family},
+    registry::Registry,
+};
 use rand::distributions::{Alphanumeric, DistString};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -60,6 +65,16 @@ async fn entrypoint(addr: &SocketAddr, conn_opts: PgConnectOptions) -> anyhow::R
         .connect_with(conn_opts)
         .await?;
     sqlx::migrate!().run(&pool).await?;
+
+    let mut registry = Registry::default();
+    let http_requests = Family::<Labels, Counter>::default();
+    registry.register(
+        "linker_http_requests",
+        "Number of HTTP requests received",
+        http_requests.clone(),
+    );
+    let registry = Arc::new(registry);
+
     let cache: Cache<Slug, String, _> = Cache::builder()
         .max_capacity(1000)
         .build_with_hasher(ahash::RandomState::new());
@@ -67,7 +82,13 @@ async fn entrypoint(addr: &SocketAddr, conn_opts: PgConnectOptions) -> anyhow::R
         .route("/:slug", get(resolve))
         .route("/rev/:url", get(reverse))
         .route("/post/:url", post(generate))
-        .with_state(Shared { pool, cache })
+        .route("/metrics", get(metrics))
+        .with_state(Shared {
+            pool,
+            cache,
+            registry,
+            http_requests,
+        })
         .layer(CorsLayer::permissive())
         .into_make_service();
 
@@ -85,13 +106,26 @@ async fn entrypoint(addr: &SocketAddr, conn_opts: PgConnectOptions) -> anyhow::R
 struct Shared {
     pool: PgPool,
     cache: Cache<Slug, String, ahash::RandomState>,
+    registry: Arc<Registry>,
+    http_requests: Family<Labels, Counter>,
 }
 
 #[tracing::instrument(skip(pool, cache))]
 async fn resolve(
-    State(Shared { pool, cache }): State<Shared>,
+    State(Shared {
+        pool,
+        cache,
+        http_requests,
+        ..
+    }): State<Shared>,
     Path(slug): Path<Slug>,
 ) -> Result<Redirect, StatusCode> {
+    http_requests
+        .get_or_create(&Labels {
+            handler: "resolve",
+            slug: SlugLabelValue(slug),
+        })
+        .inc();
     if let Some(url) = cache.get(&slug) {
         return Ok(Redirect::permanent(url.as_str()));
     }
@@ -114,7 +148,7 @@ async fn resolve(
     }
 }
 
-#[tracing::instrument(skip(pool))]
+#[tracing::instrument(skip(pool, url))]
 async fn reverse(
     State(Shared { pool, .. }): State<Shared>,
     Path(url): Path<Url>,
@@ -133,14 +167,18 @@ async fn reverse(
     }
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(pool, cache, url))]
 async fn generate(
-    State(Shared { pool, cache }): State<Shared>,
+    State(Shared { pool, cache, .. }): State<Shared>,
     Host(host): Host,
     Path(url): Path<Url>,
 ) -> Result<String, StatusCode> {
-    let Ok(mut tx) = pool.begin().await else {
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(cause = %e, "unable to start transaction for generate");
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
     };
     let mut retries = 0;
 
@@ -176,4 +214,29 @@ async fn generate(
             }),
         };
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, EncodeLabelSet)]
+struct Labels {
+    handler: &'static str,
+    slug: SlugLabelValue,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct SlugLabelValue(Slug);
+
+impl EncodeLabelValue for SlugLabelValue {
+    fn encode(&self, encoder: &mut encoding::LabelValueEncoder<'_>) -> Result<(), std::fmt::Error> {
+        <&str as EncodeLabelValue>::encode(&self.0.as_str(), encoder)
+    }
+}
+
+#[tracing::instrument(skip(registry))]
+async fn metrics(State(Shared { registry, .. }): State<Shared>) -> Result<String, StatusCode> {
+    let mut buffer = String::with_capacity(4096);
+    if let Err(e) = encoding::text::encode(&mut buffer, &registry) {
+        tracing::error!(cause = %e, "unable to encode metrics");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    Ok(buffer)
 }
