@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO links (slug, url) VALUES ($1, $2) ON CONFLICT (url) DO NOTHING",
+  "query": "INSERT INTO links (slug, url) VALUES ($1, $2)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -11,5 +11,5 @@
     },
     "nullable": []
   },
-  "hash": "828cd28859d923751e8c518c53726df69f83a7756f4bfefd6d208ecb2c344c9a"
+  "hash": "ae56bf56854a25e0982cf910a48a879cad738664e02f2a020cba8885e7201498"
 }
