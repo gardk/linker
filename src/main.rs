@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
     Router, Server,
 };
+use mimalloc::MiMalloc;
 use moka::sync::Cache;
 use prometheus_client::{
     encoding::{self, EncodeLabelSet, EncodeLabelValue},
@@ -23,6 +24,9 @@ use tower_http::cors::CorsLayer;
 use url::Url;
 
 type Slug = arrayvec::ArrayString<10>;
+
+#[global_allocator]
+static ALLOC: MiMalloc = MiMalloc;
 
 fn main() -> anyhow::Result<()> {
     let addr = env::var("LISTEN_ADDR")

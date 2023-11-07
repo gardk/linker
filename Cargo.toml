@@ -14,6 +14,7 @@ axum = { version = "0.6.20", default-features = false, features = [
   "tokio",
   "tracing",
 ] }
+mimalloc = "0.1.39"
 moka = { version = "0.12.1", features = ["sync"] }
 prometheus-client = "0.22.0"
 rand = "0.8.5"
