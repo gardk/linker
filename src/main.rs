@@ -45,23 +45,6 @@ fn main() -> anyhow::Result<()> {
         .block_on(entrypoint(&addr, conn_opts))
 }
 
-fn tracing_setup() {
-    use tracing_subscriber::{filter, fmt, prelude::*};
-
-    let filter = filter::Targets::new().with_target(env!("CARGO_PKG_NAME"), tracing::Level::DEBUG);
-    let fmt = fmt::layer()
-        .json()
-        .flatten_event(true)
-        .with_file(false)
-        .with_line_number(false)
-        .with_target(false)
-        .with_current_span(false)
-        .with_span_list(true)
-        .with_timer(fmt::time::UtcTime::rfc_3339());
-
-    tracing_subscriber::registry().with(fmt).with(filter).init();
-}
-
 async fn entrypoint(addr: &SocketAddr, conn_opts: PgConnectOptions) -> anyhow::Result<()> {
     let pool = PgPoolOptions::new()
         .min_connections(1)
@@ -79,7 +62,7 @@ async fn entrypoint(addr: &SocketAddr, conn_opts: PgConnectOptions) -> anyhow::R
     );
     let registry = Arc::new(registry);
 
-    let cache: Cache<Slug, String, _> = Cache::builder()
+    let cache = Cache::builder()
         .max_capacity(1000)
         .build_with_hasher(ahash::RandomState::new());
     let routes = Router::new()
@@ -114,7 +97,7 @@ struct Shared {
     http_requests: Family<Labels, Counter>,
 }
 
-#[tracing::instrument(skip(pool, cache))]
+#[tracing::instrument(skip_all, fields(%slug))]
 async fn resolve(
     State(Shared {
         pool,
@@ -152,7 +135,7 @@ async fn resolve(
     }
 }
 
-#[tracing::instrument(skip(pool, url))]
+#[tracing::instrument(skip_all)]
 async fn reverse(
     State(Shared { pool, .. }): State<Shared>,
     Path(url): Path<Url>,
@@ -171,7 +154,7 @@ async fn reverse(
     }
 }
 
-#[tracing::instrument(skip(pool, cache, url))]
+#[tracing::instrument(skip_all)]
 async fn generate(
     State(Shared { pool, cache, .. }): State<Shared>,
     Host(host): Host,
@@ -235,7 +218,7 @@ impl EncodeLabelValue for SlugLabelValue {
     }
 }
 
-#[tracing::instrument(skip(registry))]
+#[tracing::instrument(skip_all)]
 async fn metrics(State(Shared { registry, .. }): State<Shared>) -> Result<String, StatusCode> {
     let mut buffer = String::with_capacity(4096);
     if let Err(e) = encoding::text::encode(&mut buffer, &registry) {
@@ -243,4 +226,21 @@ async fn metrics(State(Shared { registry, .. }): State<Shared>) -> Result<String
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     Ok(buffer)
+}
+
+fn tracing_setup() {
+    use tracing_subscriber::{filter, fmt, prelude::*};
+
+    let filter = filter::Targets::new().with_target(env!("CARGO_PKG_NAME"), tracing::Level::DEBUG);
+    let fmt = fmt::layer()
+        .json()
+        .flatten_event(true)
+        .with_file(false)
+        .with_line_number(false)
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(true)
+        .with_timer(fmt::time::UtcTime::rfc_3339());
+
+    tracing_subscriber::registry().with(fmt).with(filter).init();
 }
