@@ -1,0 +1,41 @@
+[package]
+name = "linker"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ahash = "0.8.6"
+anyhow = "1.0.75"
+arrayvec = { version = "0.7.4", features = ["serde"] }
+axum = { version = "0.6.20", default-features = false, features = [
+  "http1",
+  "tokio",
+  "tracing",
+] }
+moka = { version = "0.12.1", features = ["sync"] }
+rand = "0.8.5"
+sqlx = { version = "0.7.2", default-features = false, features = [
+  "macros",
+  "migrate",
+  "runtime-tokio",
+  "tls-rustls",
+  "postgres",
+] }
+tokio = { version = "1.33.0", features = ["rt"] }
+tower-http = { version = "0.4.4", features = ["cors"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.17", default-features = false, features = [
+  "std",
+  "registry",
+  "smallvec",
+  "fmt",
+  "json",
+  "time",
+] }
+url = { version = "2.4.1", features = ["serde"] }
+
+# Include some helpful debug info in release builds.
+[profile.release]
+debug = "line-tables-only"
