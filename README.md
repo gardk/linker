@@ -1,3 +1,3 @@
 # linker
 
-> Extremely simple URL shortener with zero security.
+> Super simple URL shortener.
