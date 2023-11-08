@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State, Host},
+    extract::{Host, Path, State},
     http::StatusCode,
     response::Redirect,
 };

@@ -59,4 +59,3 @@ impl<'de> Deserialize<'de> for Slug {
         ArrayString::deserialize(de).map(Slug)
     }
 }
-
