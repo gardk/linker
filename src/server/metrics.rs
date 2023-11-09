@@ -3,23 +3,23 @@ use std::{ops::Deref, sync::Arc};
 use prometheus_client::{
     encoding::{EncodeLabelSet, EncodeLabelValue, LabelValueEncoder},
     metrics::{counter::Counter, family::Family},
-    registry,
+    registry::Registry,
 };
 
-use crate::slug::Slug;
+use crate::server::slug::Slug;
 
 #[derive(Clone)]
-pub struct Registry {
-    registry: Arc<registry::Registry>,
+pub(super) struct Metrics {
+    registry: Arc<Registry>,
     // Metric families
-    pub http_requests: Family<Labels, Counter>,
-    pub cache_hits: Family<Labels, Counter>,
-    pub cache_misses: Family<Labels, Counter>,
+    pub(super) http_requests: Family<Labels, Counter>,
+    pub(super) cache_hits: Family<Labels, Counter>,
+    pub(super) cache_misses: Family<Labels, Counter>,
 }
 
-impl Default for Registry {
+impl Default for Metrics {
     fn default() -> Self {
-        let mut registry = registry::Registry::default();
+        let mut registry = Registry::default();
         let http_requests = Family::<Labels, Counter>::default();
         let cache_hits = Family::<Labels, Counter>::default();
         let cache_misses = Family::<Labels, Counter>::default();
@@ -49,8 +49,8 @@ impl Default for Registry {
     }
 }
 
-impl Deref for Registry {
-    type Target = registry::Registry;
+impl Deref for Metrics {
+    type Target = Registry;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -59,9 +59,9 @@ impl Deref for Registry {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, EncodeLabelSet)]
-pub struct Labels {
-    pub handler: &'static str,
-    pub slug: Option<Slug>,
+pub(super) struct Labels {
+    pub(super) handler: &'static str,
+    pub(super) slug: Option<Slug>,
 }
 
 impl EncodeLabelValue for Slug {

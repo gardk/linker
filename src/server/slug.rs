@@ -4,13 +4,13 @@ use arrayvec::ArrayString;
 use rand::prelude::*;
 use serde::Deserialize;
 
-pub const LENGTH: usize = 10;
+pub(super) const LENGTH: usize = 10;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Slug(ArrayString<LENGTH>);
+pub(super) struct Slug(ArrayString<LENGTH>);
 
 impl Slug {
-    pub fn from_rng(rng: &mut impl RngCore) -> Self {
+    pub(super) fn from_rng(rng: &mut impl RngCore) -> Self {
         let dist = rand::distributions::Alphanumeric
             .sample_iter(rng)
             .take(LENGTH);
@@ -22,7 +22,7 @@ impl Slug {
     }
 
     #[inline]
-    pub fn as_str(&self) -> &str {
+    pub(super) fn as_str(&self) -> &str {
         <ArrayString<LENGTH>>::as_str(&self.0)
     }
 }

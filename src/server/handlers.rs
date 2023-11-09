@@ -1,23 +1,57 @@
+use std::sync::Arc;
+
 use axum::{
+    debug_handler,
     extract::{Host, Path, State},
     http::StatusCode,
     response::Redirect,
 };
-use prometheus_client::encoding;
+use sqlx::{
+    postgres::{PgConnectOptions, PgPoolOptions},
+    PgPool,
+};
+use tracing::instrument;
 use url::Url;
 
-use crate::{metrics::Labels, slug::Slug};
+use crate::server::metrics::Labels;
 
-pub mod shared;
+use super::{metrics::Metrics, slug::Slug};
 
-pub use self::shared::Shared;
+type Cache = moka::sync::Cache<Slug, Arc<str>, ahash::RandomState>;
 
-#[tracing::instrument(skip_all, fields(%slug))]
-pub async fn resolve(
+// Shared state required by all handlers.
+#[derive(Clone)]
+pub(super) struct Shared {
+    pool: PgPool,
+    cache: Cache,
+    metrics: Metrics,
+}
+
+impl Shared {
+    pub(super) async fn default_settings(opts: PgConnectOptions) -> color_eyre::Result<Self> {
+        let pool = PgPoolOptions::new()
+            .min_connections(1)
+            .max_connections(3)
+            .connect_with(opts)
+            .await?;
+        let cache = moka::sync::Cache::builder()
+            .max_capacity(1000)
+            .build_with_hasher(ahash::RandomState::new());
+        Ok(Self {
+            pool,
+            cache,
+            metrics: Metrics::default(),
+        })
+    }
+}
+
+#[instrument(skip_all, fields(%slug))]
+#[debug_handler]
+pub(super) async fn resolve(
     State(Shared {
         pool,
         cache,
-        registry,
+        metrics,
     }): State<Shared>,
     Path(slug): Path<Slug>,
 ) -> Result<Redirect, StatusCode> {
@@ -26,14 +60,14 @@ pub async fn resolve(
         handler: "resolve",
         slug: Some(slug),
     };
-    registry.http_requests.get_or_create(&labels).inc();
+    metrics.http_requests.get_or_create(&labels).inc();
 
     // Fast-path cache hits
     if let Some(url) = cache.get(&slug) {
-        registry.cache_hits.get_or_create(&labels).inc();
+        metrics.cache_hits.get_or_create(&labels).inc();
         return Ok(Redirect::permanent(&url));
     }
-    registry.cache_misses.get_or_create(&labels).inc();
+    metrics.cache_misses.get_or_create(&labels).inc();
 
     let url = sqlx::query_scalar!("SELECT url FROM links WHERE slug = $1", slug.as_str())
         .fetch_optional(&pool)
@@ -53,9 +87,10 @@ pub async fn resolve(
     }
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn reverse(
-    State(Shared { pool, registry, .. }): State<Shared>,
+#[instrument(skip_all)]
+#[debug_handler]
+pub(super) async fn reverse(
+    State(Shared { pool, metrics, .. }): State<Shared>,
     Path(url): Path<Url>,
 ) -> Result<String, StatusCode> {
     let slug = sqlx::query_scalar!("SELECT slug FROM links WHERE url = $1", url.as_str())
@@ -64,7 +99,7 @@ pub async fn reverse(
 
     match slug {
         Ok(Some(slug)) => {
-            registry
+            metrics
                 .http_requests
                 .get_or_create(&Labels {
                     handler: "reverse",
@@ -82,12 +117,16 @@ pub async fn reverse(
     }
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn generate(
+#[instrument(skip_all)]
+#[debug_handler]
+pub(super) async fn generate(
     State(Shared { pool, cache, .. }): State<Shared>,
     Host(host): Host,
-    Path(url): Path<Url>,
+    url: String,
 ) -> Result<String, StatusCode> {
+    let Ok(url) = Url::parse(&url) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
     let mut retries = 0;
 
     loop {
@@ -103,6 +142,7 @@ pub async fn generate(
 
         break match result {
             Ok(_) => {
+                tracing::debug!(%slug, "created");
                 cache.insert(slug, String::from(url).into());
                 // There is probably a better way to do this, but I can't be asked.
                 Ok(format!("http://{host}/{slug}"))
@@ -123,12 +163,18 @@ pub async fn generate(
     }
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn metrics(State(Shared { registry, .. }): State<Shared>) -> Result<String, StatusCode> {
+#[instrument(skip_all)]
+#[debug_handler]
+pub(super) async fn metrics(
+    State(Shared { metrics, .. }): State<Shared>,
+) -> Result<String, StatusCode> {
     let mut buffer = String::with_capacity(4096);
-    if let Err(e) = encoding::text::encode(&mut buffer, &registry) {
-        tracing::error!(cause = %e, "unable to encode metrics");
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    let res = prometheus_client::encoding::text::encode(&mut buffer, &metrics);
+    match res {
+        Ok(()) => Ok(buffer),
+        Err(e) => {
+            tracing::error!(cause = %e, "unable to encode metrics");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
-    Ok(buffer)
 }
