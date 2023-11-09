@@ -31,7 +31,7 @@ impl Shared {
     pub(super) async fn default_settings(opts: PgConnectOptions) -> color_eyre::Result<Self> {
         let pool = PgPoolOptions::new()
             .min_connections(1)
-            .max_connections(3)
+            .max_connections(10)
             .connect_with(opts)
             .await?;
         let cache = moka::sync::Cache::builder()
@@ -119,7 +119,7 @@ pub(super) async fn reverse(
 
 #[instrument(skip_all)]
 #[debug_handler]
-pub(super) async fn generate(
+pub(super) async fn register(
     State(Shared { pool, cache, .. }): State<Shared>,
     Host(host): Host,
     url: String,
@@ -165,7 +165,7 @@ pub(super) async fn generate(
 
 #[instrument(skip_all)]
 #[debug_handler]
-pub(super) async fn metrics(
+pub(super) async fn admin_metrics(
     State(Shared { metrics, .. }): State<Shared>,
 ) -> Result<String, StatusCode> {
     let mut buffer = String::with_capacity(4096);
