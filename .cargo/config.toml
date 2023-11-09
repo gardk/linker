@@ -1,0 +1,4 @@
+# Uncomment when building for servers with older glibc
+# [build]
+# target = "x86_64-unknown-linux-gnu"
+# rustflags = ["-Ctarget-cpu=x86-64-v3", "-Ctarget-feature=+crt-static"]
