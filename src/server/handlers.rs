@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use axum::{
     debug_handler,
-    extract::{Host, Path, State},
+    extract::{Form, Host, Path, State},
     http::StatusCode,
-    response::Redirect,
+    response::{Html, IntoResponse, Redirect, Response},
 };
+use serde::Deserialize;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool,
@@ -17,7 +18,7 @@ use crate::server::metrics::Labels;
 
 use super::{metrics::Metrics, slug::Slug};
 
-type Cache = moka::sync::Cache<Slug, Arc<str>, ahash::RandomState>;
+type Cache = moka::sync::Cache<Slug, (Arc<str>, bool), ahash::RandomState>;
 
 // Shared state required by all handlers.
 #[derive(Clone)]
@@ -54,7 +55,7 @@ pub(super) async fn resolve(
         metrics,
     }): State<Shared>,
     Path(slug): Path<Slug>,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Response, StatusCode> {
     // All requests are counted no matter their outcome
     let labels = Labels {
         handler: "resolve",
@@ -63,27 +64,41 @@ pub(super) async fn resolve(
     metrics.http_requests.get_or_create(&labels).inc();
 
     // Fast-path cache hits
-    if let Some(url) = cache.get(&slug) {
+    if let Some((url, hidden)) = cache.get(&slug) {
         metrics.cache_hits.get_or_create(&labels).inc();
-        return Ok(Redirect::permanent(&url));
+        return Ok(create_redirect(&url, hidden));
     }
     metrics.cache_misses.get_or_create(&labels).inc();
 
-    let url = sqlx::query_scalar!("SELECT url FROM links WHERE slug = $1", slug.as_str())
-        .fetch_optional(&pool)
-        .await;
+    let row = sqlx::query!(
+        "SELECT url, hidden FROM links WHERE slug = $1",
+        slug.as_str()
+    )
+    .fetch_optional(&pool)
+    .await;
 
-    match url {
-        Ok(Some(url)) => {
-            let resp = Redirect::permanent(&url);
-            cache.insert(slug, url.into());
-            Ok(resp)
+    match row {
+        Ok(Some(row)) => {
+            let response = create_redirect(&row.url, row.hidden);
+            cache.insert(slug, (row.url.into(), row.hidden));
+            Ok(response)
         }
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             tracing::error!(cause = %e, "unable to resolve slug");
             Err(StatusCode::SERVICE_UNAVAILABLE)
         }
+    }
+}
+
+fn create_redirect(url: &str, hidden: bool) -> Response {
+    if !hidden {
+        Redirect::permanent(url).into_response()
+    } else {
+        Html(format!(
+            "<html><body><script>window.location.href='{url}';</script></body></html>"
+        ))
+        .into_response()
     }
 }
 
@@ -117,14 +132,21 @@ pub(super) async fn reverse(
     }
 }
 
+#[derive(Deserialize)]
+pub(super) struct RegisterForm {
+    url: String,
+    #[serde(default)]
+    hidden: bool,
+}
+
 #[instrument(skip_all)]
 #[debug_handler]
 pub(super) async fn register(
     State(Shared { pool, cache, .. }): State<Shared>,
     Host(host): Host,
-    url: String,
+    Form(form): Form<RegisterForm>,
 ) -> Result<String, StatusCode> {
-    let Ok(url) = Url::parse(&url) else {
+    let Ok(url) = Url::parse(&form.url) else {
         return Err(StatusCode::BAD_REQUEST);
     };
     let mut retries = 0;
@@ -133,9 +155,10 @@ pub(super) async fn register(
         let slug = Slug::from_rng(&mut rand::thread_rng());
 
         let result = sqlx::query!(
-            "INSERT INTO links (slug, url) VALUES ($1, $2)",
+            "INSERT INTO links (slug, url, hidden) VALUES ($1, $2, $3)",
             slug.as_str(),
             url.as_str(),
+            form.hidden,
         )
         .execute(&pool)
         .await;
@@ -143,7 +166,7 @@ pub(super) async fn register(
         break match result {
             Ok(_) => {
                 tracing::debug!(%slug, "created");
-                cache.insert(slug, String::from(url).into());
+                cache.insert(slug, (String::from(url).into(), form.hidden));
                 // There is probably a better way to do this, but I can't be asked.
                 Ok(format!("http://{host}/{slug}"))
             }

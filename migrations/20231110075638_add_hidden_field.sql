@@ -1,0 +1,2 @@
+ALTER TABLE links ADD COLUMN hidden boolean NOT NULL DEFAULT false;
+ALTER TABLE links ALTER COLUMN hidden DROP DEFAULT;
