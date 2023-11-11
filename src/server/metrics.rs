@@ -13,29 +13,22 @@ pub(super) struct Metrics {
     registry: Arc<Registry>,
     // Metric families
     pub(super) http_requests: Family<Labels, Counter>,
-    pub(super) cache_hits: Family<Labels, Counter>,
-    pub(super) cache_misses: Family<Labels, Counter>,
+    pub(super) cache_misses: Counter,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
         let mut registry = Registry::default();
         let http_requests = Family::<Labels, Counter>::default();
-        let cache_hits = Family::<Labels, Counter>::default();
-        let cache_misses = Family::<Labels, Counter>::default();
+        let cache_misses = Counter::default();
         registry.register(
             "linker_http_requests",
             "Number of handled HTTP requests",
             http_requests.clone(),
         );
         registry.register(
-            "linker_cache_hits",
-            "Amount of cache hits",
-            cache_hits.clone(),
-        );
-        registry.register(
             "linker_cache_misses",
-            "Amount of cache misses",
+            "Number of cache misses resolving slugs",
             cache_misses.clone(),
         );
         let registry = Arc::new(registry);
@@ -43,7 +36,6 @@ impl Default for Metrics {
         Self {
             registry,
             http_requests,
-            cache_hits,
             cache_misses,
         }
     }

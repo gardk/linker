@@ -57,18 +57,19 @@ pub(super) async fn resolve(
     Path(slug): Path<Slug>,
 ) -> Result<Response, StatusCode> {
     // All requests are counted no matter their outcome
-    let labels = Labels {
-        handler: "resolve",
-        slug: Some(slug),
-    };
-    metrics.http_requests.get_or_create(&labels).inc();
+    metrics
+        .http_requests
+        .get_or_create(&Labels {
+            handler: "resolve",
+            slug: Some(slug),
+        })
+        .inc();
 
     // Fast-path cache hits
     if let Some((url, hidden)) = cache.get(&slug) {
-        metrics.cache_hits.get_or_create(&labels).inc();
         return Ok(create_redirect(&url, hidden));
     }
-    metrics.cache_misses.get_or_create(&labels).inc();
+    metrics.cache_misses.inc();
 
     let row = sqlx::query!(
         "SELECT url, hidden FROM links WHERE slug = $1",
@@ -79,9 +80,9 @@ pub(super) async fn resolve(
 
     match row {
         Ok(Some(row)) => {
-            let response = create_redirect(&row.url, row.hidden);
+            let resp = create_redirect(&row.url, row.hidden);
             cache.insert(slug, (row.url.into(), row.hidden));
-            Ok(response)
+            Ok(resp)
         }
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
