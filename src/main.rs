@@ -1,3 +1,5 @@
+#![warn(unused_crate_dependencies)]
+
 use std::env;
 
 use color_eyre::eyre::Context;

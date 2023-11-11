@@ -27,7 +27,9 @@ pub(crate) async fn run(addr: &SocketAddr, opts: PgConnectOptions) -> color_eyre
         .route("/reg", post(handlers::register))
         .nest(
             "/admin",
-            Router::new().route("/metrics", get(handlers::admin_metrics)),
+            Router::new()
+                .route("/metrics", get(handlers::admin_metrics))
+                .route("/list", get(handlers::admin_list)),
         )
         .with_state(shared)
         .layer(CorsLayer::permissive())

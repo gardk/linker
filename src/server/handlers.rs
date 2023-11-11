@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use axum::{
+    body::StreamBody,
     debug_handler,
     extract::{Form, Host, Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
-use serde::Deserialize;
+use futures_util::{Stream, TryStreamExt};
+use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool,
@@ -21,7 +23,6 @@ use super::{metrics::Metrics, slug::Slug};
 type Cache = moka::sync::Cache<Slug, (Arc<str>, bool), ahash::RandomState>;
 
 // Shared state required by all handlers.
-#[derive(Clone)]
 pub(super) struct Shared {
     pool: PgPool,
     cache: Cache,
@@ -29,7 +30,9 @@ pub(super) struct Shared {
 }
 
 impl Shared {
-    pub(super) async fn default_settings(opts: PgConnectOptions) -> color_eyre::Result<Self> {
+    pub(super) async fn default_settings(
+        opts: PgConnectOptions,
+    ) -> color_eyre::Result<&'static Self> {
         let pool = PgPoolOptions::new()
             .min_connections(1)
             .max_connections(10)
@@ -38,11 +41,11 @@ impl Shared {
         let cache = moka::sync::Cache::builder()
             .max_capacity(1000)
             .build_with_hasher(ahash::RandomState::new());
-        Ok(Self {
+        Ok(Box::leak(Box::new(Self {
             pool,
             cache,
             metrics: Metrics::default(),
-        })
+        })))
     }
 }
 
@@ -53,7 +56,7 @@ pub(super) async fn resolve(
         pool,
         cache,
         metrics,
-    }): State<Shared>,
+    }): State<&'static Shared>,
     Path(slug): Path<Slug>,
 ) -> Result<Response, StatusCode> {
     // All requests are counted no matter their outcome
@@ -75,7 +78,7 @@ pub(super) async fn resolve(
         "SELECT url, hidden FROM links WHERE slug = $1",
         slug.as_str()
     )
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await;
 
     match row {
@@ -106,11 +109,11 @@ fn create_redirect(url: &str, hidden: bool) -> Response {
 #[instrument(skip_all)]
 #[debug_handler]
 pub(super) async fn reverse(
-    State(Shared { pool, metrics, .. }): State<Shared>,
+    State(Shared { pool, metrics, .. }): State<&'static Shared>,
     Path(url): Path<Url>,
 ) -> Result<String, StatusCode> {
     let slug = sqlx::query_scalar!("SELECT slug FROM links WHERE url = $1", url.as_str())
-        .fetch_optional(&pool)
+        .fetch_optional(pool)
         .await;
 
     match slug {
@@ -143,7 +146,7 @@ pub(super) struct RegisterForm {
 #[instrument(skip_all)]
 #[debug_handler]
 pub(super) async fn register(
-    State(Shared { pool, cache, .. }): State<Shared>,
+    State(Shared { pool, cache, .. }): State<&'static Shared>,
     Host(host): Host,
     Form(form): Form<RegisterForm>,
 ) -> Result<String, StatusCode> {
@@ -161,7 +164,7 @@ pub(super) async fn register(
             url.as_str(),
             form.hidden,
         )
-        .execute(&pool)
+        .execute(pool)
         .await;
 
         break match result {
@@ -190,10 +193,10 @@ pub(super) async fn register(
 #[instrument(skip_all)]
 #[debug_handler]
 pub(super) async fn admin_metrics(
-    State(Shared { metrics, .. }): State<Shared>,
+    State(Shared { metrics, .. }): State<&'static Shared>,
 ) -> Result<String, StatusCode> {
     let mut buffer = String::with_capacity(4096);
-    let res = prometheus_client::encoding::text::encode(&mut buffer, &metrics);
+    let res = prometheus_client::encoding::text::encode(&mut buffer, metrics);
     match res {
         Ok(()) => Ok(buffer),
         Err(e) => {
@@ -201,4 +204,31 @@ pub(super) async fn admin_metrics(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+#[instrument(skip_all)]
+#[debug_handler]
+pub(super) async fn admin_list(
+    State(Shared { pool, .. }): State<&'static Shared>,
+) -> StreamBody<impl Stream<Item = sqlx::Result<String>>> {
+    #[derive(Serialize)]
+    struct Row<'a> {
+        slug: &'a str,
+        url: &'a str,
+        hidden: bool,
+    }
+
+    sqlx::query!("SELECT slug, url, hidden FROM links")
+        .fetch(pool)
+        .map_ok(|row| {
+            let mut s = serde_json::to_string(&Row {
+                slug: &row.slug,
+                url: &row.url,
+                hidden: row.hidden,
+            })
+            .unwrap();
+            s.push('\n');
+            s
+        })
+        .into()
 }
