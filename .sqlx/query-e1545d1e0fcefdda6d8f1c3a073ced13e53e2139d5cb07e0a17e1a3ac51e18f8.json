@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO links (slug, url, hidden) VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e1545d1e0fcefdda6d8f1c3a073ced13e53e2139d5cb07e0a17e1a3ac51e18f8"
+}

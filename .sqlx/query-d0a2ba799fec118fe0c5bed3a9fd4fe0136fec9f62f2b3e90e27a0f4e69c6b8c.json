@@ -1,12 +1,17 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT url FROM links WHERE slug = $1",
+  "query": "SELECT url, hidden FROM links WHERE slug = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
         "name": "url",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "hidden",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -15,8 +20,9 @@
       ]
     },
     "nullable": [
+      false,
       false
     ]
   },
-  "hash": "8df76546708d93b5f22f7d587378e182b9a0f633619aa2c98eef9b9ef045a0df"
+  "hash": "d0a2ba799fec118fe0c5bed3a9fd4fe0136fec9f62f2b3e90e27a0f4e69c6b8c"
 }
